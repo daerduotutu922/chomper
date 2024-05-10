@@ -1,21 +1,22 @@
-from .hooks import CStandardLibraryHooks
-from .loader import ELFLoader
-
-from chomper.types import BaseOs
+from chomper.base import BaseOs
+from chomper.os.android.hooks import get_hooks
+from chomper.os.android.loader import ELFLoader
 
 
 class AndroidOs(BaseOs):
-    """The Android environment."""
+    """Provide Android runtime environment."""
 
     def __init__(self, emu, **kwargs):
         super().__init__(emu, **kwargs)
 
         self.loader = ELFLoader(emu)
 
-    def init_hooks(self):
+        self._setup_hooks()
+
+    def _setup_hooks(self):
         """Initialize the hooks."""
-        CStandardLibraryHooks.register(self.emu)
+        self.emu.hooks.update(get_hooks())
 
     def initialize(self):
         """Initialize the environment."""
-        self.init_hooks()
+        self._setup_hooks()
