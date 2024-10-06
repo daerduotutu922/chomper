@@ -3,18 +3,16 @@ import random
 import time
 import uuid
 from functools import wraps
-from typing import Dict
-
-from unicorn.unicorn import UC_HOOK_CODE_TYPE
+from typing import Callable, Dict
 
 from chomper.exceptions import SymbolMissingException
 from chomper.objc import ObjC
 from chomper.utils import pyobj2cfobj
 
-hooks: Dict[str, UC_HOOK_CODE_TYPE] = {}
+hooks: Dict[str, Callable] = {}
 
 
-def get_hooks() -> Dict[str, UC_HOOK_CODE_TYPE]:
+def get_hooks() -> Dict[str, Callable]:
     """Returns a dictionary of default hooks."""
     return hooks.copy()
 
@@ -526,5 +524,28 @@ def hook_sec_item_copy_matching(uc, address, size, user_data):
 
     if a2:
         emu.write_u64(a2, result)
+
+    return 0
+
+
+@register_hook("_mach_vm_allocate")
+def hook_mach_vm_allocate(uc, address, size, user_data):
+    emu = user_data["emu"]
+
+    addr = emu.get_arg(1)
+    size = emu.get_arg(2)
+
+    mem = emu.memory_manager.alloc(size)
+    emu.write_pointer(addr, mem)
+
+    return 0
+
+
+@register_hook("_mach_vm_deallocate")
+def hook_mach_vm_deallocate(uc, address, size, user_data):
+    emu = user_data["emu"]
+
+    mem = emu.get_arg(1)
+    emu.memory_manager.free(mem)
 
     return 0

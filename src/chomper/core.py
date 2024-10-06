@@ -15,7 +15,6 @@ from unicorn import (
     arm64_const,
     arm_const,
 )
-from unicorn.unicorn import UC_HOOK_CODE_TYPE
 
 from . import const
 from .arch import arm_arch, arm64_arch
@@ -30,7 +29,7 @@ from .utils import aligned
 
 
 class Chomper:
-    """Lightweight emulation framework for emulating native programs on Android and iOS.
+    """Lightweight emulation framework for emulating iOS executables and libraries.
 
     Args:
         arch: The architecture to emulate, support ARM and ARM64.
@@ -81,7 +80,7 @@ class Chomper:
 
         self.modules: List[Module] = []
 
-        self.hooks: Dict[str, UC_HOOK_CODE_TYPE] = {}
+        self.hooks: Dict[str, Callable] = {}
         self.syscall_handlers: Dict[int, Callable] = {}
 
         self.memory_manager = MemoryManager(
@@ -283,7 +282,7 @@ class Chomper:
     def add_hook(
         self,
         symbol_or_addr: Union[int, str],
-        callback: UC_HOOK_CODE_TYPE,
+        callback: Callable,
         user_data: Optional[dict] = None,
     ) -> int:
         """Add hook to the emulator.
@@ -322,7 +321,7 @@ class Chomper:
     def add_interceptor(
         self,
         symbol_or_addr: Union[int, str],
-        callback: UC_HOOK_CODE_TYPE,
+        callback: Callable,
         user_data: Optional[dict] = None,
     ):
         """Add interceptor to the emulator."""
@@ -640,15 +639,28 @@ class Chomper:
     def read_string(self, address: int) -> str:
         """Read string from the address."""
         data = bytes()
-        offset = 0
 
-        while True:
-            byte = self.read_bytes(address + offset, 1)
-            if byte == b"\x00":
-                break
+        block_size = 1024
+        end = b"\x00"
 
-            data += byte
-            offset += 1
+        try:
+            while True:
+                buf = self.read_bytes(address, block_size)
+                if buf.find(end) != -1:
+                    data += buf[: buf.index(end)]
+                    break
+
+                data += buf
+                address += block_size
+
+        except UcError:
+            for i in range(block_size):
+                buf = self.read_bytes(address + i, 1)
+                if buf == end:
+                    break
+
+                data += buf
+                address += 1
 
         return data.decode("utf-8")
 
