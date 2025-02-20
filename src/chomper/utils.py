@@ -1,5 +1,10 @@
+import inspect
+import os
 from ctypes import addressof, create_string_buffer, sizeof, memmove, Structure
+from functools import wraps
+from typing import Optional
 
+from .log import get_logger
 from .objc import ObjC
 
 
@@ -33,17 +38,14 @@ def pyobj2nsobj(emu, obj: object) -> int:
             ns_value = pyobj2nsobj(emu, value)
 
             objc.msg_send(ns_obj, "setObject:forKey:", ns_value, ns_key)
-
     elif isinstance(obj, list):
         ns_obj = objc.msg_send("NSMutableArray", "array")
 
         for item in obj:
             ns_item = pyobj2nsobj(emu, item)
             objc.msg_send(ns_obj, "addObject:", ns_item)
-
     elif isinstance(obj, str):
         ns_obj = objc.msg_send("NSString", "stringWithUTF8String:", obj)
-
     elif isinstance(obj, bytes):
         if obj:
             buffer = emu.create_buffer(len(obj))
@@ -53,7 +55,6 @@ def pyobj2nsobj(emu, obj: object) -> int:
             buffer = 0
 
         ns_obj = objc.msg_send("NSData", "dataWithBytes:length:", buffer, len(obj))
-
     else:
         raise TypeError(f"Unsupported type: {type(obj)}")
 
@@ -98,7 +99,6 @@ def pyobj2cfobj(emu, obj: object) -> int:
             cf_strs.append(cf_value)
 
             emu.call_symbol("_CFDictionaryAddValue", cf_obj, cf_key, cf_value)
-
     elif isinstance(obj, list):
         cf_type_array_callbacks = emu.find_symbol("_kCFTypeArrayCallBacks")
 
@@ -112,7 +112,6 @@ def pyobj2cfobj(emu, obj: object) -> int:
         for item in obj:
             cf_item = pyobj2cfobj(emu, item)
             emu.call_symbol("_CFArrayAppendValue", cf_obj, cf_item)
-
     elif isinstance(obj, str):
         str_ptr = emu.create_string(obj)
         mem_ptrs.append(str_ptr)
@@ -123,7 +122,6 @@ def pyobj2cfobj(emu, obj: object) -> int:
             str_ptr,
             0x8000100,
         )
-
     elif isinstance(obj, bytes):
         if obj:
             buffer = emu.create_buffer(len(obj))
@@ -138,7 +136,6 @@ def pyobj2cfobj(emu, obj: object) -> int:
             buffer,
             len(obj),
         )
-
     else:
         raise TypeError(f"Unsupported type: {type(obj)}")
 
@@ -149,3 +146,53 @@ def pyobj2cfobj(emu, obj: object) -> int:
         emu.call_symbol("_CFRelease", cf_str)
 
     return cf_obj
+
+
+def log_call(func):
+    """Decorator to print function calls and parameters."""
+
+    current_frame = inspect.currentframe()
+    caller_frame = inspect.getouterframes(current_frame)[1]
+    module_name = caller_frame.frame.f_globals["__name__"]
+
+    @wraps(func)
+    def decorator(*args, **kwargs):
+        logger = get_logger(module_name)
+
+        sig = inspect.signature(func)
+        bound_args = sig.bind(*args, **kwargs)
+        bound_args.apply_defaults()
+
+        args_str = ""
+
+        for name, value in bound_args.arguments.items():
+            if name in ("self", "cls"):
+                continue
+            if args_str:
+                args_str += ", "
+            args_str += f"{name}={repr(value)}"
+
+        log_prefix = f"Monitor '{func.__name__}' "
+        logger.info(f"{log_prefix}call: {args_str}")
+
+        retval = func(*args, **kwargs)
+
+        if isinstance(retval, int):
+            logger.info(f"{log_prefix}return: {retval}")
+        else:
+            logger.info(f"{log_prefix}return")
+
+        return retval
+
+    return decorator
+
+
+def safe_join(directory: str, *paths: str) -> Optional[str]:
+    """Safely join path to avoid escaping the base directory."""
+    full_path = os.path.join(directory, *paths)
+    abs_path = os.path.abspath(full_path)
+
+    if not abs_path.startswith(os.path.abspath(directory)):
+        return None
+
+    return abs_path

@@ -1,5 +1,7 @@
 import logging
 import os
+import urllib.request
+from pathlib import Path
 
 from chomper import Chomper
 from chomper.const import ARCH_ARM64, OS_IOS
@@ -14,7 +16,7 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger()
 
 
 def hook_retval(retval):
@@ -24,18 +26,39 @@ def hook_retval(retval):
     return decorator
 
 
+def download_sample_file(binary_path: str) -> str:
+    filepath = os.path.join(base_path, "..", binary_path)
+
+    path = Path(filepath).resolve()
+    if path.exists():
+        return filepath
+
+    if not path.parent.exists():
+        path.parent.mkdir(parents=True)
+
+    url = "https://sourceforge.net/projects/chomper-emu/files/%s/download" % binary_path
+
+    print(f"Downloading sample file: {url}")
+    urllib.request.urlretrieve(url, path)
+    return filepath
+
+
 def main():
+    binary_path = "examples/binaries/ios/com.csair.MBP/CSMBP-AppStore-Package"
+
+    # Download sample file from SourceForge
+    download_sample_file(binary_path)
+    download_sample_file(f"{binary_path}/../Info.plist")
+
     emu = Chomper(
         arch=ARCH_ARM64,
         os_type=OS_IOS,
-        logger=logger,
-        rootfs_path=os.path.join(base_path, "ios/rootfs"),
+        rootfs_path=os.path.join(base_path, "../rootfs/ios"),
     )
-
     objc = ObjC(emu)
 
     czair = emu.load_module(
-        module_file=os.path.join(base_path, "ios/apps/com.csair.MBP/CSMBP-AppStore-Package"),
+        module_file=os.path.join(base_path, "..", binary_path),
         exec_init_array=True,
     )
 
@@ -44,16 +67,18 @@ def main():
 
     with objc.autorelease_pool():
         # Encrypt
-        encrypt_str = '{"biClassId":["2","3","4"]}'
-        encrypt_result = objc.msg_send("JMBox125", "JMBox167:JMBox501:", pyobj2nsobj(emu, encrypt_str), 1)
+        encrypt_input = pyobj2nsobj(emu, '{"biClassId":["2","3","4"]}')
+        encrypt_result = objc.msg_send("JMBox125", "JMBox167:JMBox501:", encrypt_input, 1)
+        encrypt_result_str = emu.read_string(objc.msg_send(encrypt_result, "cStringUsingEncoding:", 4))
 
-        logger.info("Encrypt result: %s", emu.read_string(objc.msg_send(encrypt_result, "cStringUsingEncoding:", 4)))
+        logger.info("Encrypt result: %s", encrypt_result_str)
 
         # Decrypt
-        decrypt_str = "XKQYFMCP9Eb0IUzrQ9KaRRvTeFcYYyLcInrS/IWp6be1+VZa14GanCrzeb3DR45HW+XH0xiZLA5WUjUcXnlpM+CC6EtauUDUxCLap3QPWRyewLUosCB/ESHE7341DQca6lx5KFcP0XCkBpGlEKpACR5v7TwNBxc62auNBDvmEY422LTAUEEBrC8FDE+Y4DS2IJTLN6h9f7hdmQ4zUnY4cwyZXwgdIoH+bVuNy6TSw1JjQaFF/fLLHVZOQovrMcjtTpMZGr8xOSoW/+msiZzKwET3"
-        decrypt_result = objc.msg_send("JMBox125", "JMBox153:JMBox501:", pyobj2nsobj(emu, decrypt_str), 1)
+        decrypt_input = pyobj2nsobj(emu, "XKQYFMCP9Eb0IUzrQ9KaRRvTeFcYYyLcInrS/IWp6be1+VZa14GanCrzeb3DR45HW+XH0xiZLA5WUjUcXnlpM+CC6EtauUDUxCLap3QPWRyewLUosCB/ESHE7341DQca6lx5KFcP0XCkBpGlEKpACR5v7TwNBxc62auNBDvmEY422LTAUEEBrC8FDE+Y4DS2IJTLN6h9f7hdmQ4zUnY4cwyZXwgdIoH+bVuNy6TSw1JjQaFF/fLLHVZOQovrMcjtTpMZGr8xOSoW/+msiZzKwET3")
+        decrypt_result = objc.msg_send("JMBox125", "JMBox153:JMBox501:", decrypt_input, 1)
+        decrypt_result_str = emu.read_string(objc.msg_send(decrypt_result, "cStringUsingEncoding:", 4))
 
-        logger.info("Decrypt result: %s", emu.read_string(objc.msg_send(decrypt_result, "cStringUsingEncoding:", 4)))
+        logger.info("Decrypt result: %s", decrypt_result_str)
 
 
 if __name__ == "__main__":

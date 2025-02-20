@@ -1,6 +1,6 @@
 import lief
 
-from chomper.exceptions import SymbolMissingException
+from chomper.exceptions import SymbolMissing
 from chomper.types import Module
 
 
@@ -53,7 +53,28 @@ class SystemModuleFixup:
                     address = module_base + section.virtual_address + pos
                     self.emu.write_pointer(address, module_base + value)
 
-    def relocate_symbols(self, binary: lief.MachO.Binary):
+    @staticmethod
+    def check_address(address: int, binary: lief.MachO.Binary):
+        """Check whether the address is within a valid data section."""
+        for segment_name in ("__DATA", "__DATA_DIRTY"):
+            segment = binary.get_segment(segment_name)
+            if not segment:
+                continue
+
+            for section_name in ("__data", "__cstring"):
+                section = segment.get_section(section_name)
+                if not section:
+                    continue
+
+                if (
+                    section.virtual_address
+                    <= address
+                    <= section.virtual_address + section.size
+                ):
+                    return True
+        return False
+
+    def relocate_symbols(self, binary: lief.MachO.Binary, module_base: int):
         """Relocate references to all symbols."""
         for symbol in binary.symbols:
             if not symbol.value:
@@ -61,17 +82,21 @@ class SystemModuleFixup:
 
             self.add_refs_relocation(symbol.value)
 
+            symbol_value = self.emu.read_pointer(module_base + symbol.value)
+            if self.check_address(symbol_value, binary):
+                self.add_refs_relocation(symbol_value)
+
     def relocate_block_invoke_calls(self, binary: lief.MachO.Binary, module_base: int):
         """Relocate function address for block struct."""
         for binding in binary.dyld_info.bindings:
             if binding.symbol.name == "__NSConcreteGlobalBlock":
                 address = module_base + binding.address
 
-                flags = self.emu.read_u32(address + 0x8)
-                reversed_value = self.emu.read_u32(address + 0xC)
+                flags = self.emu.read_u32(address + 8)
+                reversed_value = self.emu.read_u32(address + 12)
 
                 if flags == 0x50000000 and reversed_value == 0:
-                    self.relocate_pointer(module_base, address + 0x10)
+                    self.relocate_pointer(module_base, address + 16)
 
     def fixup_sections(self, binary: lief.MachO.Binary, module_base: int):
         """Fixup sections which contains pointers."""
@@ -104,15 +129,12 @@ class SystemModuleFixup:
 
                     self.fixup_class_struct(module_base, meta_class_ptr)
                     self.add_refs_relocation(meta_class_ptr)
-
             elif section_name == "__objc_catlist":
                 for value in values:
                     self.fixup_category_struct(module_base, value)
-
             elif section_name == "__objc_protolist":
                 for value in values:
                     self.fixup_protocol_struct(module_base, value)
-
             elif section_name == "__objc_protorefs":
                 for value in values:
                     self.relocate_pointer(module_base, module_base + value + 8)
@@ -155,14 +177,13 @@ class SystemModuleFixup:
 
         if flag < 0x80000000:
             for i in range(count):
-                method_ptr = method_list_ptr + 8 + i * 0x18
+                method_ptr = method_list_ptr + 8 + i * 24
 
                 # Fixup method SEL
                 self.relocate_pointer(module_base, method_ptr)
 
                 # Fixup method IMPL
-                self.relocate_pointer(module_base, method_ptr + 0x10)
-
+                self.relocate_pointer(module_base, method_ptr + 16)
         else:
             for i in range(count):
                 sel_offset_ptr = method_list_ptr + 8 + i * 12
@@ -180,11 +201,11 @@ class SystemModuleFixup:
         count = self.emu.read_u32(variable_list_ptr + 4)
 
         for i in range(count):
-            variable_offset = variable_list_ptr + 8 + i * 0x18
+            variable_offset = variable_list_ptr + 8 + i * 24
 
             self.relocate_pointer(module_base, variable_offset)
-            self.relocate_pointer(module_base, variable_offset + 0x8)
-            self.relocate_pointer(module_base, variable_offset + 0x16)
+            self.relocate_pointer(module_base, variable_offset + 8)
+            self.relocate_pointer(module_base, variable_offset + 22)
 
     def fixup_protocol_list(self, module_base: int, address: int):
         """Fixup the protocol list struct."""
@@ -195,53 +216,56 @@ class SystemModuleFixup:
         count = self.emu.read_u64(protocol_list_ptr)
 
         for i in range(count):
-            protocol_offset = protocol_list_ptr + 8 + i * 0x8
+            protocol_offset = protocol_list_ptr + 8 + i * 8
 
             protocol_address = self.relocate_pointer(module_base, protocol_offset)
-            self.relocate_pointer(module_base, protocol_address + 0x8)
+            self.relocate_pointer(module_base, protocol_address + 8)
 
     def fixup_class_struct(self, module_base: int, address: int):
         """Fixup the class struct."""
         address += module_base
 
-        data_ptr = self.emu.read_pointer(address + 0x20)
+        data_ptr = self.emu.read_pointer(address + 32)
         self.add_refs_relocation(data_ptr)
 
         data_ptr += module_base
 
-        name_ptr = self.emu.read_pointer(data_ptr + 0x18)
+        name_ptr = self.emu.read_pointer(data_ptr + 24)
         if name_ptr:
             self.add_refs_relocation(name_ptr)
 
-        instance_methods_ptr = data_ptr + 0x20
+        instance_methods_ptr = data_ptr + 32
         self.fixup_method_list(module_base, instance_methods_ptr)
 
-        protocols_ptr = data_ptr + 0x28
+        protocols_ptr = data_ptr + 40
         self.fixup_protocol_list(module_base, protocols_ptr)
 
-        instance_variables_ptr = data_ptr + 0x30
+        instance_variables_ptr = data_ptr + 48
         self.fixup_variable_list(module_base, instance_variables_ptr)
 
     def fixup_protocol_struct(self, module_base: int, address: int):
         """Fixup the protocol struct."""
         address += module_base
 
-        name_ptr = self.emu.read_pointer(address + 0x8)
+        name_ptr = self.emu.read_pointer(address + 8)
         if name_ptr:
             self.add_refs_relocation(name_ptr)
 
-        protocols_ptr = address + 0x10
+        protocols_ptr = address + 16
         self.fixup_protocol_list(module_base, protocols_ptr)
 
     def fixup_category_struct(self, module_base: int, address: int):
         """Fixup the category struct."""
         address += module_base
 
-        instance_methods_ptr = address + 0x10
+        instance_methods_ptr = address + 16
         self.fixup_method_list(module_base, instance_methods_ptr)
 
-        class_methods_ptr = address + 0x18
+        class_methods_ptr = address + 24
         self.fixup_method_list(module_base, class_methods_ptr)
+
+        protocols_ptr = address + 32
+        self.fixup_protocol_list(module_base, protocols_ptr)
 
     def fixup_cstring_section(self, binary: lief.MachO.Binary):
         """Fixup the `__cstring` section."""
@@ -278,7 +302,7 @@ class SystemModuleFixup:
             while offset < section.size:
                 self.add_refs_relocation(start + offset)
 
-                str_ptr = module_base + start + offset + 0x10
+                str_ptr = module_base + start + offset + 16
                 self.relocate_pointer(module_base, str_ptr)
 
                 offset += step
@@ -299,21 +323,59 @@ class SystemModuleFixup:
 
             if symbol:
                 for i in range(6):
-                    offset = 0x30 + 0x8 * i
+                    offset = 48 + 8 * i
                     address = self.emu.read_pointer(symbol.address + offset)
                     self.add_refs_relocation(address)
-
-        except SymbolMissingException:
+        except SymbolMissing:
             pass
+
+    def fixup_data_const_segment(self, binary: lief.MachO.Binary):
+        """Fixup pointers in the `__DATA_CONST` segment."""
+        section = binary.get_section("__DATA_CONST", "__const")
+        if not section:
+            return
+
+        section_content = bytes(section.content)
+        if not section_content:
+            return
+
+        text_section = binary.get_section("__TEXT", "__text")
+        text_begin = text_section.virtual_address
+        text_end = text_begin + text_section.size
+
+        const_section = binary.get_section("__TEXT", "__const")
+        const_begin = const_section.virtual_address
+        const_end = const_begin + const_section.size
+
+        for offset in range(0, section.size, 8):
+            address = int.from_bytes(section_content[offset : offset + 8], "little")
+            if (
+                text_begin < address < text_end
+                or const_begin < address < const_end
+                or section.virtual_address
+                < address
+                < section.virtual_address + section.size
+            ):
+                self.add_refs_relocation(address)
+
+    def fixup_stubs_refs(self, binary: lief.MachO.Binary):
+        """Fixup references to the `__stubs` section."""
+        section = binary.get_section("__stubs")
+        if not section:
+            return
+
+        for offset in range(0, section.size, 12):
+            self.add_refs_relocation(section.virtual_address + offset)
 
     def install(self, module: Module):
         """Fixup image for the module."""
         if not module.binary:
+            self.emu.logger.warning("Fixup install failed due to empty binary.")
             return
 
         module_base = module.base - (module.image_base or 0)
 
-        self.relocate_symbols(module.binary)
+        self.relocate_symbols(module.binary, module_base)
         self.relocate_block_invoke_calls(module.binary, module_base)
 
         self.fixup_sections(module.binary, module_base)
@@ -321,6 +383,8 @@ class SystemModuleFixup:
         self.fixup_cfstring_section(module.binary, module_base)
         self.fixup_cf_uni_char_string(module.binary)
         self.fixup_dispatch_vtable()
+        self.fixup_data_const_segment(module.binary)
+        self.fixup_stubs_refs(module.binary)
 
         self.relocate_refs(module.binary, module_base)
 

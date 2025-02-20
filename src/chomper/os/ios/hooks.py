@@ -1,11 +1,8 @@
-import datetime
-import random
-import time
-import uuid
+import os
 from functools import wraps
 from typing import Callable, Dict
 
-from chomper.exceptions import SymbolMissingException
+from chomper.exceptions import SymbolMissing, ObjCUnrecognizedSelector
 from chomper.objc import ObjC
 from chomper.utils import pyobj2cfobj
 
@@ -36,123 +33,36 @@ def hook_os_unfair_lock_assert_owner(uc, address, size, user_data):
     pass
 
 
-@register_hook("_stat")
-def hook_stat(uc, address, size, user_data):
-    emu = user_data["emu"]
-
-    stat = emu.get_arg(1)
-
-    # st_mode
-    emu.write_u32(stat + 4, 0x4000)
-
-    return 0
-
-
-@register_hook("_lstat")
-def hook_lstat(uc, address, size, user_data):
-    emu = user_data["emu"]
-
-    stat = emu.get_arg(1)
-
-    # st_mode
-    emu.write_u32(stat + 4, 0x4000)
-
-    return 0
-
-
-@register_hook("___sysctlbyname")
-def hook_sysctlbyname(uc, address, size, user_data):
-    emu = user_data["emu"]
-
-    name = emu.read_string(emu.get_arg(0))
-    oldp = emu.get_arg(2)
-    oldlenp = emu.get_arg(3)
-
-    if not oldp or not oldlenp:
-        return 0
-
-    if name == "kern.boottime":
-        emu.write_u64(oldp, int(time.time()) - 3600 * 24)
-        emu.write_u64(oldp + 8, 0)
-
-    elif name == "kern.osvariant_status":
-        variant_status = 0
-
-        # can_has_debugger = 3
-        variant_status |= 3 << 2
-
-        # internal_release_type = 3
-        variant_status |= 3 << 4
-
-        emu.write_u64(oldp, variant_status)
-
-    elif name == "hw.memsize":
-        emu.write_u64(oldp, 4 * 1024 * 1024 * 1024)
-
-    else:
-        raise RuntimeError("Unhandled sysctl command: %s" % name)
-
-    return 0
-
-
-@register_hook("_getcwd")
-def hook_getcwd(uc, address, size, user_data):
-    emu = user_data["emu"]
-
-    path = f"/private/var/containers/Bundle/Application/{uuid.uuid4()}/"
-
-    buf = emu.get_arg(0)
-    emu.write_string(buf, path)
-
-    return 0
-
-
 @register_hook("_opendir")
 def hook_opendir(uc, address, size, user_data):
-    return 0
-
-
-@register_hook("_time")
-def hook_time(uc, address, size, user_data):
-    return int(time.time())
-
-
-@register_hook("_srandom")
-def hook_srandom(uc, address, size, user_data):
-    return 0
-
-
-@register_hook("_random")
-def hook_random(uc, address, size, user_data):
-    return random.randint(0, 2**32 - 1)
-
-
-@register_hook("_localtime_r")
-def hook_localtime_r(uc, address, size, user_data):
     emu = user_data["emu"]
 
-    tp = emu.read_u64(emu.get_arg(0))
-    tm = emu.get_arg(1)
+    path = emu.read_string(emu.get_arg(0))
 
-    date = datetime.datetime.fromtimestamp(tp)
+    return emu.file_manager.opendir(path)
 
-    emu.write_u32(tm, date.second)
-    emu.write_u32(tm + 4, date.minute)
-    emu.write_u32(tm + 8, date.hour)
-    emu.write_u32(tm + 12, date.day)
-    emu.write_u32(tm + 16, date.month)
-    emu.write_u32(tm + 20, date.year)
-    emu.write_u32(tm + 24, 0)
-    emu.write_u32(tm + 28, 0)
-    emu.write_u32(tm + 32, 0)
-    emu.write_u64(tm + 40, 8 * 60 * 60)
 
-    return 0
+@register_hook("_readdir")
+def hook_readdir(uc, address, size, user_data):
+    emu = user_data["emu"]
+
+    dirp = emu.get_arg(0)
+
+    return emu.file_manager.readdir(dirp)
+
+
+@register_hook("_closedir")
+def hook_closedir(uc, address, size, user_data):
+    emu = user_data["emu"]
+
+    dirp = emu.get_arg(0)
+
+    return emu.file_manager.closedir(dirp)
 
 
 @register_hook("___srefill")
 def hook_srefill(uc, address, size, user_data):
-    return 0
+    return 1
 
 
 @register_hook("_pthread_self")
@@ -161,12 +71,25 @@ def hook_pthread_self(uc, address, size, user_data):
 
 
 @register_hook("_pthread_rwlock_rdlock")
+@register_hook("_pthread_rwlock_rdlock$VARIANT$armv81")
 def hook_pthread_rwlock_rdlock(uc, address, size, user_data):
     return 0
 
 
+@register_hook("_pthread_rwlock_wrlock")
+@register_hook("_pthread_rwlock_wrlock$VARIANT$armv81")
+def hook_pthread_rwlock_wrlock(uc, address, size, user_data):
+    return 0
+
+
 @register_hook("_pthread_rwlock_unlock")
+@register_hook("_pthread_rwlock_unlock$VARIANT$armv81")
 def hook_pthread_rwlock_unlock(uc, address, size, user_data):
+    return 0
+
+
+@register_hook("_pthread_mutex_lock")
+def hook_pthread_mutex_lock(uc, address, size, user_data):
     return 0
 
 
@@ -341,7 +264,7 @@ def hook_dlsym(uc, address, size, user_data):
     try:
         symbol = emu.find_symbol(symbol_name)
         return symbol.address
-    except SymbolMissingException:
+    except SymbolMissing:
         pass
 
     return 0
@@ -357,53 +280,18 @@ def hook_dispatch_async(uc, address, size, user_data):
     return 0
 
 
-@register_hook("_uloc_getLanguage")
-def hook_uloc_get_language(uc, address, size, user_data):
-    return 0
-
-
-@register_hook("_uloc_getScript")
-def hook_uloc_get_script(uc, address, size, user_data):
-    return 0
-
-
-@register_hook("_uloc_getCountry")
-def hook_uloc_get_country(uc, address, size, user_data):
-    return 0
-
-
-@register_hook("_uloc_getVariant")
-def hook_uloc_get_variant(uc, address, size, user_data):
-    return 0
-
-
-@register_hook("_uloc_openKeywords")
-def hook_uloc_open_keywords(uc, address, size, user_data):
-    return 0
-
-
-@register_hook("_uloc_getDisplayName")
-def hook_uloc_get_display_name(uc, address, size, user_data):
-    return 0
-
-
-@register_hook("_uloc_getDisplayLanguage")
-def hook_uloc_get_display_language(uc, address, size, user_data):
-    return 0
-
-
-@register_hook("_uenum_next")
-def hook_uenum_next(uc, address, size, user_data):
-    return 0
-
-
-@register_hook("_uenum_close")
-def hook_uenum_close(uc, address, size, user_data):
+@register_hook("_dispatch_resume")
+def hook_dispatch_resume(uc, address, size, user_data):
     return 0
 
 
 @register_hook("_os_log_type_enabled")
 def hook_os_log_type_enabled(uc, address, size, user_data):
+    return 0
+
+
+@register_hook("_os_log_create")
+def hook_os_log_create(uc, address, size, user_data):
     return 0
 
 
@@ -439,6 +327,32 @@ def hook_cf_preferences_copy_app_value_with_container_and_configuration(
 
 @register_hook("__CFBundleCreateInfoDictFromMainExecutable")
 def hook_cf_bundle_create_info_dict_from_main_executable(uc, address, size, user_data):
+    emu = user_data["emu"]
+
+    executable_dir = os.path.dirname(emu.os.executable_path)
+    info_path = os.path.join(executable_dir, "Info.plist")
+
+    if not os.path.exists(info_path):
+        raise FileNotFoundError(
+            "File 'Info.plist' not found, please ensure that 'Info.plist' "
+            "and executable file are in the same directory."
+        )
+
+    with open(info_path, "rb") as f:
+        info_content = f.read()
+
+    info_data = emu.create_buffer(len(info_content) + 100)
+    emu.write_bytes(info_data, info_content)
+
+    cf_bundle = emu.call_symbol(
+        "__CFBundleCreateInfoDictFromData", info_data, len(info_content)
+    )
+
+    return cf_bundle
+
+
+@register_hook("__CFBundleResourceLogger")
+def hook_cf_bundle_resource_logger(uc, address, size, user_data):
     return 0
 
 
@@ -453,6 +367,16 @@ def hook_cf_x_preferences_copy_current_application_state_with_deadlock_avoidance
 
 @register_hook("_CFNotificationCenterGetLocalCenter")
 def hook_cf_notification_center_get_local_center(uc, address, size, user_data):
+    return 0
+
+
+@register_hook("_CFNotificationCenterAddObserver")
+def hook_cf_notification_center_add_observer(uc, address, size, user_data):
+    return 0
+
+
+@register_hook("_CFNotificationCenterPostNotification")
+def hook_cf_notification_center_post_notification(uc, address, size, user_data):
     return 0
 
 
@@ -549,3 +473,32 @@ def hook_mach_vm_deallocate(uc, address, size, user_data):
     emu.memory_manager.free(mem)
 
     return 0
+
+
+@register_hook("+[NSObject(NSObject) doesNotRecognizeSelector:]")
+def hook_ns_object_does_not_recognize_selector_for_class(uc, address, size, user_data):
+    emu = user_data["emu"]
+
+    receiver = emu.get_arg(0)
+    selector = emu.read_string(emu.get_arg(2))
+
+    class_name = emu.read_string(emu.call_symbol("_class_getName", receiver))
+    raise ObjCUnrecognizedSelector(
+        f"Unrecognized selector '{selector}' of class '{class_name}'"
+    )
+
+
+@register_hook("-[NSObject(NSObject) doesNotRecognizeSelector:]")
+def hook_ns_object_does_not_recognize_selector_for_instance(
+    uc, address, size, user_data
+):
+    emu = user_data["emu"]
+
+    receiver = emu.get_arg(0)
+    selector = emu.read_string(emu.get_arg(2))
+
+    class_ = emu.call_symbol("_object_getClass", receiver)
+    class_name = emu.read_string(emu.call_symbol("_class_getName", class_))
+    raise ObjCUnrecognizedSelector(
+        f"Unrecognized selector '{selector}' of instance '{class_name}'"
+    )

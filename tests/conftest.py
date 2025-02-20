@@ -1,4 +1,6 @@
 import os
+import urllib.request
+from pathlib import Path
 
 import pytest
 
@@ -8,25 +10,31 @@ from chomper.objc import ObjC
 
 base_path = os.path.abspath(os.path.dirname(__file__))
 
-android_lib_path = os.path.join(base_path, "../examples/android/rootfs/system/lib")
-android_lib64_path = os.path.join(base_path, "../examples/android/rootfs/system/lib64")
+android_lib_path = os.path.join(base_path, "../rootfs/android/system/lib")
+android_lib64_path = os.path.join(base_path, "../rootfs/android/system/lib64")
 
-ios_rootfs_path = os.path.join(base_path, "../examples/ios/rootfs")
+ios_rootfs_path = os.path.join(base_path, "../rootfs/ios")
 
-com_shizhuang_duapp_path = os.path.join(
-    base_path, "../examples/android/apps/com.shizhuang.duapp"
-)
-com_xingin_xhs_path = os.path.join(base_path, "../examples/android/apps/com.xingin.xhs")
+android_binaries_path = os.path.join(base_path, "../examples/binaries/android")
+ios_binaries_path = os.path.join(base_path, "../examples/binaries/ios")
 
 
-@pytest.fixture(scope="module")
-def input_str():
-    yield "chomper"
+def download_binary_file(binary_path: str) -> str:
+    filepath = os.path.join(base_path, "..", binary_path)
 
+    path = Path(filepath).resolve()
+    if path.exists():
+        return filepath
 
-@pytest.fixture(scope="module")
-def input_bytes(input_str):
-    yield input_str.encode("utf-8")
+    if not path.parent.exists():
+        path.parent.mkdir(parents=True)
+
+    url = "https://sourceforge.net/projects/chomper-emu/files/%s/download" % binary_path
+
+    print(f"Downloading file: {url}")
+    urllib.request.urlretrieve(url, path)
+
+    return filepath
 
 
 @pytest.fixture(scope="module")
@@ -46,9 +54,13 @@ def libz_arm(emu_arm):
 
 @pytest.fixture(scope="module")
 def libdusanwa_v4856_arm(emu_arm):
-    """From com.shizhuang.duapp 4.85.6"""
+    """From com.shizhuang.duapp v4.85.6"""
+    module_path = download_binary_file(
+        binary_path="examples/binaries/android/com.shizhuang.duapp/libdusanwa.so"
+    )
+
     yield emu_arm.load_module(
-        module_file=os.path.join(com_shizhuang_duapp_path, "libdusanwa.so"),
+        module_file=module_path,
         exec_init_array=True,
     )
 
@@ -70,17 +82,25 @@ def libz_arm64(emu_arm64):
 
 @pytest.fixture(scope="module")
 def libszstone_v4945_arm64(emu_arm64):
-    """From com.shizhuang.duapp 4.94.5"""
+    """From com.shizhuang.duapp v4.94.5"""
+    module_path = download_binary_file(
+        binary_path="examples/binaries/android/com.shizhuang.duapp/libszstone.so"
+    )
+
     yield emu_arm64.load_module(
-        module_file=os.path.join(com_shizhuang_duapp_path, "libszstone.so"),
+        module_file=module_path,
         exec_init_array=True,
     )
 
 
 @pytest.fixture(scope="module")
 def libtiny_v73021_arm64(emu_arm64):
-    """From com.xingin.xhs 7.30.2.1"""
-    yield emu_arm64.load_module(os.path.join(com_xingin_xhs_path, "libtiny.so"))
+    """From com.xingin.xhs v7.30.2.1"""
+    module_path = download_binary_file(
+        binary_path="examples/binaries/android/com.xingin.xhs/libtiny.so"
+    )
+
+    yield emu_arm64.load_module(module_path)
 
 
 @pytest.fixture(scope="module")

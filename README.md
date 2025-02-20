@@ -5,7 +5,7 @@
 ![PyPI - Python Version](https://img.shields.io/pypi/pyversions/chomper)
 [![GitHub license](https://img.shields.io/github/license/sledgeh4w/chomper)](https://github.com/sledgeh4w/chomper/blob/main/LICENSE)
 
-Chomper is a lightweight emulation framework based on [Unicorn](https://github.com/unicorn-engine/unicorn). It is mainly used to emulate iOS executables and libraries. In addition, it also provides limited support for Android native libraries.
+Chomper is a lightweight emulation framework based on [Unicorn](https://github.com/unicorn-engine/unicorn). It is mainly used to emulate security algorithms of iOS executables and libraries. In addition, it also provides limited support for Android native libraries.
 
 ## Features
 
@@ -37,11 +37,11 @@ from chomper.const import ARCH_ARM64, OS_IOS
 emu = Chomper(
     arch=ARCH_ARM64,
     os_type=OS_IOS,
-    rootfs_path="examples/ios/rootfs",
+    rootfs_path="rootfs/ios",
 )
 
 # Load main program
-duapp = emu.load_module("examples/ios/apps/com.siwuai.duapp/DUApp")
+duapp = emu.load_module("examples/binaries/ios/com.siwuai.duapp/DUApp")
 
 s = "chomper"
 
@@ -69,12 +69,12 @@ from chomper.objc import ObjC
 emu = Chomper(
     arch=ARCH_ARM64,
     os_type=OS_IOS,
-    rootfs_path="examples/ios/rootfs",
+    rootfs_path="rootfs/ios",
 )
 
 objc = ObjC(emu)
 
-emu.load_module("examples/ios/apps/cn.com.scal.sichuanair/zsch")
+emu.load_module("examples/binaries/ios/cn.com.scal.sichuanair/zsch")
 
 # Use this context manager to ensure that Objective-C objects can be automatically released
 with objc.autorelease_pool():
@@ -98,11 +98,11 @@ from chomper.const import ARCH_ARM64, OS_ANDROID
 emu = Chomper(arch=ARCH_ARM64, os_type=OS_ANDROID)
 
 # Load C standard and other libraries
-emu.load_module("examples/android/rootfs/system/lib64/libc.so")
-emu.load_module("examples/android/rootfs/system/lib64/libz.so")
+emu.load_module("examples/rootfs/android/system/lib64/libc.so")
+emu.load_module("examples/rootfs/android/system/lib64/libz.so")
 
 libszstone = emu.load_module(
-    "examples/android/apps/com.shizhuang.duapp/libszstone.so",
+    "examples/binaries/android/com.shizhuang.duapp/libszstone.so",
     exec_init_array=True,
 )
 
@@ -117,4 +117,4 @@ result = emu.read_bytes(a3, result_size)
 ```
 
 ## Examples
-[Here](https://github.com/sledgeh4w/chomper/tree/main/examples) are some encryption emulation examples for security vendors.
+There are some security algorithm emulation codes in the [examples](https://github.com/sledgeh4w/chomper/tree/main/examples), and you can download all example binary files from [SourceForge](https://sourceforge.net/projects/chomper-emu/files/examples/binaries/).
